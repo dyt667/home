@@ -1,153 +1,110 @@
 #include <WiFi.h>
 #include <WebServer.h>
 
-// ===================== WiFi 配置（你指定的）=====================
-const char* ssid = "桃予柠";       // 你的WiFi名称
-const char* password = "00000000"; // 你的WiFi密码
+// ================= 配置区域 =================
+const char* ssid = "桃予柠";
+const char* password = "00000000";
 
-// ===================== 引脚定义 =====================
-const int LED_PIN_1 = 2;    // D2
-const int LED_PIN_2 = 5;    // D5
-const int LED_PIN_3 = 19;   // D19
-const int touchPin = 4;     // D4 触摸引脚
-const int threshold = 700;  // 触摸阈值
-
-// ===================== 全局状态 =====================
-bool isArmed = false;    // 是否布防
-bool isAlarming = false; // 是否报警中
+// LED 引脚 (D2, D5, D19)
+const int LED_PIN_1 = 2;
+const int LED_PIN_2 = 5;
+const int LED_PIN_3 = 19;
 
 WebServer server(80);
+int currentBrightness = 0;
 
-// ===================== 网页 =====================
-String index_html = R"HTML(
+// ================= HTML 网页 =================
+String index_html = R"EOF(
 <!DOCTYPE html>
 <html>
 <head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ESP32 安防主机</title>
-<style>
-  body{text-align:center; font-family:Arial; margin-top:50px;}
-  .btn{
-    width:200px; height:70px; font-size:22px;
-    margin:20px; border:none; border-radius:10px; color:white;
-  }
-  .arm{background:#ff3333;}
-  .disarm{background:#33cc33;}
-  .status{font-size:24px; margin:20px;}
-</style>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 无极调光</title>
+    <style>
+        body{font-family: Arial; text-align: center; background: #f4f4f4; padding: 30px;}
+        .container{background: white; padding: 40px; border-radius: 15px; display: inline-block;}
+        h1{color: #333;}
+        .slider{width: 350px; height: 25px; margin: 20px 0;}
+        #value{font-size: 28px; font-weight: bold; color: #007bff;}
+    </style>
 </head>
 <body>
-  <h1>ESP32 安防报警系统</h1>
-  <div class="status" id="status">状态：未布防</div>
-  
-  <button class="btn arm" onclick="arm()">布防 (Arm)</button>
-  <button class="btn disarm" onclick="disarm()">撤防 (Disarm)</button>
+    <div class="container">
+        <h1>LED 无极调光器</h1>
+        <input type="range" min="0" max="255" value="0" class="slider" id="slider" oninput="update()">
+        <p>当前亮度：<span id="value">0</span></p>
+    </div>
 
-  <script>
-    function arm(){
-      fetch("/arm");
-      document.getElementById("status").innerHTML = "状态：已布防";
-    }
-    function disarm(){
-      fetch("/disarm");
-      document.getElementById("status").innerHTML = "状态：未布防";
-    }
-  </script>
+    <script>
+        function update() {
+            var val = document.getElementById("slider").value;
+            document.getElementById("value").innerHTML = val;
+            fetch("/set?b=" + val);
+        }
+    </script>
 </body>
 </html>
-)HTML";
+)EOF";
 
-// ===================== 路由处理 =====================
+// ================= 服务器函数 =================
 void handleRoot() {
   server.send(200, "text/html", index_html);
 }
 
-void handleArm() {
-  isArmed = true;
-  isAlarming = false;
-  Serial.println("系统已布防");
-  server.send(200, "text/plain", "Armed");
+void handleSet() {
+  if (server.hasArg("b")) {
+    currentBrightness = server.arg("b").toInt();
+    
+    // 限制亮度 0-255
+    if (currentBrightness < 0) currentBrightness = 0;
+    if (currentBrightness > 255) currentBrightness = 255;
+
+    // 通用 analogWrite 控制三路LED
+    analogWrite(LED_PIN_1, currentBrightness);
+    analogWrite(LED_PIN_2, currentBrightness);
+    analogWrite(LED_PIN_3, currentBrightness);
+
+    Serial.print("网页设置亮度：");
+    Serial.println(currentBrightness);
+  }
+  server.send(200, "text/plain", "OK");
 }
 
-void handleDisarm() {
-  isArmed = false;
-  isAlarming = false;
-  analogWrite(LED_PIN_1, 0);
-  analogWrite(LED_PIN_2, 0);
-  analogWrite(LED_PIN_3, 0);
-  Serial.println("系统已撤防");
-  server.send(200, "text/plain", "Disarmed");
-}
-
-// 控制所有LED
-void setAllLED(int value) {
-  analogWrite(LED_PIN_1, value);
-  analogWrite(LED_PIN_2, value);
-  analogWrite(LED_PIN_3, value);
-}
-
-// ===================== setup =====================
 void setup() {
   Serial.begin(115200);
 
+  // 初始化LED引脚
   pinMode(LED_PIN_1, OUTPUT);
   pinMode(LED_PIN_2, OUTPUT);
   pinMode(LED_PIN_3, OUTPUT);
-  pinMode(touchPin, INPUT);
   
-  setAllLED(0);
+  // 初始关灯
+  analogWrite(LED_PIN_1, 0);
+  analogWrite(LED_PIN_2, 0);
+  analogWrite(LED_PIN_3, 0);
 
-  // WiFi 连接
-  WiFi.disconnect(true);
-  delay(100);
-  WiFi.mode(WIFI_STA);
-  
-  Serial.print("连接 WiFi: ");
+  // 连接 WiFi
+  Serial.print("正在连接 WiFi: ");
   Serial.println(ssid);
   WiFi.begin(ssid, password);
-
-  int timeout = 20;
-  while (WiFi.status() != WL_CONNECTED && timeout-- > 0) {
+  while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
+  Serial.println("");
+  Serial.println("WiFi 连接成功！");
+  Serial.print("控制面板地址: ");
+  Serial.println(WiFi.localIP());
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nWiFi 连接成功！");
-    Serial.print("网页地址: ");
-    Serial.println(WiFi.localIP());
-  } else {
-    Serial.println("\nWiFi 连接失败！");
-  }
-
+  // 服务器路由
   server.on("/", handleRoot);
-  server.on("/arm", handleArm);
-  server.on("/disarm", handleDisarm);
-  
+  server.on("/set", handleSet);
+
+  // 启动服务器
   server.begin();
   Serial.println("Web 服务器已启动");
 }
 
-// ===================== loop =====================
 void loop() {
   server.handleClient();
-
-  // 布防状态下检测触摸
-  if (isArmed && !isAlarming) {
-    int touchValue = touchRead(touchPin);
-    if (touchValue < threshold) {
-      isAlarming = true;
-      Serial.println("!!! 触摸报警触发 !!!");
-    }
-  }
-
-  // 报警闪烁（必须撤防才会停止）
-  if (isAlarming) {
-    setAllLED(255);
-    delay(100);
-    setAllLED(0);
-    delay(100);
-  }
-
-  delay(50);
 }
