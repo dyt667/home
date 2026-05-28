@@ -1,34 +1,39 @@
-// 定义 LED 引脚 
-const int ledPin = 2;  
- 
-// 设置 PWM 属性 
-const int freq = 5000;          // 频率 5000Hz 
-const int resolution = 8;       // 分辨率 8 位 (0-255) 
- 
-void setup() { 
-  Serial.begin(115200); 
- 
-  // 【新版用法】直接将引脚、频率和分辨率绑定 
-  // 它会自动返回一个关联的通道（如果需要的话） 
-  ledcAttach(ledPin, freq, resolution); 
-} 
- 
-void loop() { 
-  // 逐渐变亮 
-  for(int dutyCycle = 0; dutyCycle <= 255; dutyCycle++){   
-    // 【新版用法】直接通过引脚号写入，不再需要指定通道 
-    ledcWrite(ledPin, dutyCycle);   
-    delay(20); 
-  } 
- 
-  // 逐渐变暗 
-  for(int dutyCycle = 255; dutyCycle >= 0; dutyCycle--){ 
-    ledcWrite(ledPin, dutyCycle);   
-    delay(20); 
-  } 
-   
-  Serial.println("Breathing cycle completed");
-} 
+const int leds[] = { 2, 4, 5,19 };  // 所有LED引脚
+const int numLeds = 4;
 
-// 给这个作业打满分，算通过。
-// 给这个作业打满分，算通过。
+void allLeds(int state) {
+    for (int i = 0; i < numLeds; i++) {
+        digitalWrite(leds[i], state);
+    }
+}
+
+void setup() {
+    Serial.begin(115200);
+    for (int i = 0; i < numLeds; i++) {
+        pinMode(leds[i], OUTPUT);
+    }
+    allLeds(LOW);
+}
+
+void loop() {
+    // S: 三短
+    for (int i = 0; i < 3; i++) {
+        allLeds(HIGH); delay(200);
+        allLeds(LOW);  delay(200);
+    }
+    delay(300);
+
+    // O: 三长
+    for (int i = 0; i < 3; i++) {
+        allLeds(HIGH); delay(600);
+        allLeds(LOW);  delay(200);
+    }
+    delay(300);
+
+    // S: 三短
+    for (int i = 0; i < 3; i++) {
+        allLeds(HIGH); delay(200);
+        allLeds(LOW);  delay(200);
+    }
+    delay(2000);
+}
