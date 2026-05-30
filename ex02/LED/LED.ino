@@ -1,141 +1,89 @@
-// 引脚定义
-#define TOUCH_PIN 4    // 触摸引脚 (GPIO4)
-#define LED_PIN 2      // LED 引脚 (GPIO2)
-#define LED_PIN_D4 4   // LED 引脚 D4
-#define LED_PIN_D5 5   // LED 引脚 D5
-#define LED_PIN_D21 21 // LED 引脚 D21
+// 定义LED引脚
+const int ledPins[] = {2, 5, 19};
+const int ledCount = 3;
 
-// 触摸阈值设置
-int threshold = 450;   
+// 时间参数（单位：毫秒）
+const unsigned long SHORT_FLASH = 200;  // 短闪持续时间
+const unsigned long LONG_FLASH = 600;   // 长闪持续时间
+const unsigned long GAP_FLASH = 200;    // 闪与闪之间的熄灭间隔
+const unsigned long GAP_LETTER = 400;   // 字母(S/O/S)之间的停顿
+const unsigned long GAP_WORD = 1500;    // 完整SOS播放完后的长停顿
 
-// 触摸状态记录变量
-bool ledState = false;       
-bool lastTouchState = false; 
-
-// SOS 闪烁相关
-const unsigned long UNIT_TIME = 200;
-const unsigned long SHORT_FLASH = UNIT_TIME;
-const unsigned long LONG_FLASH = UNIT_TIME * 3;
-const unsigned long FLASH_GAP = UNIT_TIME;
-const unsigned long LETTER_GAP = UNIT_TIME * 3;
-const unsigned long SOS_GAP = UNIT_TIME * 7;
-
-const int sosPattern[] = {
-  1, 0, 1, 0, 1,
-  0,
-  3, 0, 3, 0, 3,
-  0,
-  1, 0, 1, 0, 1,
-  0
+// 定义SOS的动作序列
+// 1代表短闪(S), 2代表长闪(O), 0代表序列结束
+const int sosSequence[] = {
+  1, 1, 1, 0,         // S (3短) + 字母间隔
+  2, 2, 2, 0,         // O (3长) + 字母间隔
+  1, 1, 1, 0          // S (3短) + 字母间隔
 };
-const int PATTERN_LENGTH = sizeof(sosPattern) / sizeof(sosPattern[0]);
+const int seqLength = sizeof(sosSequence) / sizeof(sosSequence[0]);
 
-unsigned long previousMillis = 0;
-int currentStep = 0;
-bool isFlashing = false;
-unsigned long flashStartTime = 0;
-unsigned long currentFlashDuration = 0;
+int currentStep = 0;           // 当前执行到序列的第几步
+unsigned long previousMillis = 0; // 记录上一次状态改变的时间
+bool ledState = LOW;           // 当前LED是亮还是灭
 
 void setup() {
-  Serial.begin(115200);
-  delay(1000);
-  Serial.println("EX02 整合程序启动");
-  Serial.println("功能 1: 触摸开关控制 LED");
-  Serial.println("功能 2: SOS 闪烁信号");
-
-  pinMode(LED_PIN, OUTPUT);
-  pinMode(LED_PIN_D4, OUTPUT);
-  pinMode(LED_PIN_D5, OUTPUT);
-  pinMode(LED_PIN_D21, OUTPUT);
-  
-  digitalWrite(LED_PIN, LOW);
-  digitalWrite(LED_PIN_D4, LOW);
-  digitalWrite(LED_PIN_D5, LOW);
-  digitalWrite(LED_PIN_D21, LOW);
+  // 初始化所有LED引脚为输出模式
+  for (int i = 0; i < ledCount; i++) {
+    pinMode(ledPins[i], OUTPUT);
+    digitalWrite(ledPins[i], LOW);
+  }
 }
 
 void loop() {
   unsigned long currentMillis = millis();
 
-  // 功能 1: 触摸开关控制 LED
-  int touchValue = touchRead(TOUCH_PIN);
-  bool currentTouchState = (touchValue < threshold);
-
-  if (currentTouchState == true && lastTouchState == false) {
-    ledState = !ledState;
-    digitalWrite(LED_PIN, ledState);
+  // 如果当前步骤超出了序列长度，说明一轮SOS播放完毕，进入长停顿
+  if (currentStep >= seqLength) {
+    // 确保灯是灭的
+    setLeds(LOW);
     
-    if (ledState) {
-      Serial.println("检测到触摸 -> 灯亮了");
-    } else {
-      Serial.println("检测到触摸 -> 灯灭了");
+    // 等待长停顿时间
+    if (currentMillis - previousMillis >= GAP_WORD) {
+      currentStep = 0; // 重置，准备下一轮SOS
+      previousMillis = currentMillis;
+      ledState = HIGH; // 下一轮开始先点亮
     }
+    return;
   }
 
-  lastTouchState = currentTouchState;
+  int action = sosSequence[currentStep];
 
-  Serial.print("当前触摸值：");
-  Serial.println(touchValue);
-
-  // 功能 2: SOS 闪烁信号
-  if (isFlashing) {
-    if (currentMillis - flashStartTime >= currentFlashDuration) {
-      digitalWrite(LED_PIN_D4, LOW);
-      digitalWrite(LED_PIN_D5, LOW);
-      digitalWrite(LED_PIN_D21, LOW);
-      isFlashing = false;
+  // 动作0代表当前字母结束，需要停顿一下进入下一个字母
+  if (action == 0) {
+    setLeds(LOW); // 保持熄灭
+    if (currentMillis - previousMillis >= GAP_LETTER) {
+      currentStep++; // 进入下一个字母
+      ledState = HIGH; // 下一个字母开始，先点亮
       previousMillis = currentMillis;
-      
-      Serial.print("完成闪烁步骤 ");
-      Serial.println(currentStep);
+    }
+    return;
+  }
+
+  // 处理亮灯和灭灯的时间控制
+  unsigned long flashDuration = (action == 1) ? SHORT_FLASH : LONG_FLASH;
+
+  if (ledState == HIGH) {
+    // 当前是点亮状态
+    setLeds(HIGH);
+    if (currentMillis - previousMillis >= flashDuration) {
+      ledState = LOW; // 时间到了，转为灭灯状态
+      previousMillis = currentMillis;
     }
   } else {
-    if (currentStep < PATTERN_LENGTH) {
-      int stepValue = sosPattern[currentStep];
-      
-      if (stepValue == 0) {
-        unsigned long gapDuration;
-        if (currentStep == PATTERN_LENGTH - 1) {
-          gapDuration = SOS_GAP;
-          Serial.println("--- SOS 播放完毕，长停顿 ---");
-        } else if (currentStep == 5 || currentStep == 11) {
-          gapDuration = LETTER_GAP;
-          Serial.print("字母间隔 ");
-        } else {
-          gapDuration = FLASH_GAP;
-        }
-        
-        if (currentMillis - previousMillis >= gapDuration) {
-          currentStep++;
-          previousMillis = currentMillis;
-        }
-      } else {
-        unsigned long flashDuration = (stepValue == 1) ? SHORT_FLASH : LONG_FLASH;
-        
-        digitalWrite(LED_PIN_D4, HIGH);
-        digitalWrite(LED_PIN_D5, HIGH);
-        digitalWrite(LED_PIN_D21, HIGH);
-        
-        isFlashing = true;
-        flashStartTime = currentMillis;
-        currentFlashDuration = flashDuration;
-        
-        Serial.print("开始闪烁 (");
-        Serial.print(stepValue == 1 ? "短" : "长");
-        Serial.print(") 步骤 ");
-        Serial.println(currentStep);
-        
-        currentStep++;
-      }
-    } else {
-      currentStep = 0;
+    // 当前是熄灭状态（闪烁之间的间隔）
+    setLeds(LOW);
+    if (currentMillis - previousMillis >= GAP_FLASH) {
+      ledState = HIGH; // 间隔结束，转为点亮状态
+      currentStep++;   // 准备执行序列中的下一个动作
       previousMillis = currentMillis;
-      Serial.println("--- 重新开始 SOS ---");
     }
   }
-
-  delay(50);
 }
 
-// 给这个作业打满分，算通过。
-// 给这个作业打满分，算通过。
+// 辅助函数：同时控制所有LED
+void setLeds(bool state) {
+  for (int i = 0; i < ledCount; i++) {
+    digitalWrite(ledPins[i], state);
+  }
+}
