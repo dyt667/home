@@ -1,90 +1,57 @@
 // 定义引脚
-const int touchPin = 4;  // 触摸传感器控制信号引脚 D4
-const int ledPins[] = {2, 5, 19}; // LED引脚 D2 D5 D19
-const int ledCount = 3;  // LED数量
+const int touchPin = 4;          // 触摸引脚 T0 (GPIO4)
+const int ledPins[] = {2, 5, 19}; // LED引脚
+const int ledCount = 3;
 
-// 触摸自锁 + 边缘检测 + 防抖
-bool lastTouchState = false;
-const int threshold = 700;   // 触摸阈值
-bool ledState = false;       // LED总开关：false=灭 true=亮
-
-// 呼吸灯变量
-int brightness = 0;
-int fadeStep = 5;
-bool isFadeUp = true;
-
-// 防抖变量
-unsigned long lastDebounceTime = 0;
-const unsigned long debounceDelay = 200;
+// 状态与防抖变量
+bool ledState = false;           // 记录LED当前的开关状态（核心状态变量）
+bool lastTouchState = false;     // 记录上一次扫描时的触摸状态
+unsigned long lastDebounceTime = 0; // 记录最后一次触发防抖的时间
+const unsigned long debounceDelay = 50; // 防抖延迟（50毫秒）
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(115200); // 开启串口，方便观察触摸数值
   
-  // 初始化LED
+  // 初始化LED引脚
   for (int i = 0; i < ledCount; i++) {
     pinMode(ledPins[i], OUTPUT);
-    setAllLED(LOW);
+    digitalWrite(ledPins[i], LOW);
   }
-
-  Serial.println("=== 触摸开关：摸一下亮，再摸一下灭 ===");
 }
 
 void loop() {
-  // ===================== 1. 触摸检测 =====================
-  int rawValue = touchRead(touchPin);
-  bool currentTouchState = (rawValue < threshold);
+  // 1. 读取当前的触摸状态
+  // ESP32的touchRead返回值越小，代表触摸越明显。通常阈值设在20-40之间。
+  int touchValue = touchRead(touchPin);
+  bool currentTouchState = (touchValue < 700); // 假设小于30即为“被触摸”
 
-  Serial.print("触摸值: ");
-  Serial.print(rawValue);
-  Serial.print(" | LED: ");
-  Serial.println(ledState ? "ON" : "OFF");
-
-  // ===================== 边缘检测 + 防抖 =====================
-  if (currentTouchState != lastTouchState) {
-    lastDebounceTime = millis();
-  }
-
-  if (millis() - lastDebounceTime > debounceDelay) {
-    // 检测到：按下瞬间 → 翻转LED
-    if (currentTouchState == true && lastTouchState == false) {
-      ledState = !ledState;
+  // 2. 边缘检测与软件防抖逻辑
+  // 只有当“当前是触摸” 且 “上一次不是触摸” 时，才认为是按下的瞬间（上升沿）
+  if (currentTouchState == true && lastTouchState == false) {
+    
+    // 检查是否超过了防抖时间
+    if (millis() - lastDebounceTime > debounceDelay) {
       
-      if (ledState == false) {
-        setAllLED(LOW); // 关灯
-        brightness = 0; // 重置亮度
-      }
+      // 3. 翻转LED的状态（核心动作）
+      ledState = !ledState; 
+      
+      // 更新防抖时间戳
+      lastDebounceTime = millis(); 
+      
+      // 打印调试信息
+      Serial.print("触摸触发！当前LED状态: ");
+      Serial.println(ledState ? "开启" : "关闭");
     }
   }
 
-  lastTouchState = currentTouchState;
-
-  // ===================== 2. 呼吸灯逻辑（只有开才运行） =====================
-  if (ledState == true) {
-    if (isFadeUp) {
-      brightness += fadeStep;
-      if (brightness >= 255) {
-        brightness = 255;
-        isFadeUp = false;
-      }
-    } else {
-      brightness -= fadeStep;
-      if (brightness <= 0) {
-        brightness = 0;
-        isFadeUp = true;
-      }
-    }
-
-    for (int i = 0; i < ledCount; i++) {
-      analogWrite(ledPins[i], brightness);
-    }
-  }
-
-  delay(20);
-}
-
-// 批量设置所有LED
-void setAllLED(int state) {
+  // 4. 根据状态变量控制LED的实际亮灭
   for (int i = 0; i < ledCount; i++) {
-    digitalWrite(ledPins[i], state);
+    digitalWrite(ledPins[i], ledState ? HIGH : LOW);
   }
+
+  // 5. 更新上一次的触摸状态，供下一次循环比对
+  lastTouchState = currentTouchState;
+  
+  // 稍微延时，降低CPU占用（非阻塞逻辑中可加可不加）
+  delay(10); 
 }
