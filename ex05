@@ -1,88 +1,89 @@
 // 定义引脚
-const int touchPin = 4;  // 触摸传感器控制信号引脚 D4
-const int ledPins[] = {2, 5, 19}; // LED引脚 D2 D5 D19
-const int ledCount = 3;  // LED数量
+const int touchPin = 4;           // 触摸引脚 T0 (GPIO4)
+const int ledPins[] = {2, 5, 19}; // LED引脚 (D2, D5, D19)
+const int ledCount = 3;
 
-// 触摸自锁 + 档位切换变量
-bool lastTouchState = false; // 上一次触摸状态
-const int threshold = 700;   // 触摸阈值
-int speedGear = 1;           // 呼吸灯速度档位：1=慢 2=中 3=快
+// 触摸状态与防抖变量
+bool lastTouchState = false;
+unsigned long lastDebounceTime = 0;
+const unsigned long debounceDelay = 50; 
 
-// 呼吸灯变量
-int brightness = 0;    // LED亮度
-int fadeStep = 5;      // 亮度变化步长
-bool isFadeUp = true;  // 呼吸方向：true=变亮 false=变暗
+// 闪烁状态变量
+int speedLevel = 1;          // 速度档位：1(1Hz), 2(5Hz), 3(10Hz)
+unsigned long currentFreq = 1; // 当前频率，默认为1Hz
+unsigned long previousMillis = 0; // 记录上一次状态改变的时间
+bool ledState = LOW;         // 当前LED是亮还是灭
 
 void setup() {
-  // 串口波特率 115200
   Serial.begin(115200);
-  
-  // 初始化LED引脚
+
+  // 初始化LED引脚为输出模式
   for (int i = 0; i < ledCount; i++) {
     pinMode(ledPins[i], OUTPUT);
-    analogWrite(ledPins[i], 0); // 初始熄灭
+    digitalWrite(ledPins[i], LOW);
   }
-  
-  // 初始化触摸引脚
-  pinMode(touchPin, INPUT);
-  Serial.println("=== 3档触摸调速呼吸灯已启动 ===");
 }
 
 void loop() {
-  // ===================== 1. 触摸检测 + 档位切换 =====================
-  int rawValue = touchRead(touchPin); 
-  Serial.print("触摸数值: ");
-  Serial.print(rawValue);
-  Serial.print("  | 当前档位: ");
-  Serial.println(speedGear);
+  // -------------------------
+  // 第一部分：触摸检测与档位切换
+  // -------------------------
+  int touchValue = touchRead(touchPin);
+  bool currentTouchState = (touchValue < 700); // 阈值设为30
 
-  bool currentTouchState = (rawValue < threshold);
-
-  // 边缘检测：触摸瞬间切换档位
+  // 边缘检测 + 软件防抖
   if (currentTouchState == true && lastTouchState == false) {
-    speedGear++;          // 档位+1
-    if (speedGear > 3) {  // 3档循环：1→2→3→1
-      speedGear = 1;
+    if (millis() - lastDebounceTime > debounceDelay) {
+      
+      // 循环切换档位：1 -> 2 -> 3 -> 1 ...
+      speedLevel++;
+      if (speedLevel > 3) {
+        speedLevel = 1;
+      }
+      
+      // 根据档位设定精准的闪烁频率 (Hz)
+      switch (speedLevel) {
+        case 1: currentFreq = 1; break;   // 1Hz (每秒闪1次)
+        case 2: currentFreq = 5; break;   // 5Hz (每秒闪5次)
+        case 3: currentFreq = 10; break;  // 10Hz (每秒闪10次)
+      }
+
+      // 切换频率时重置时间基准，防止卡顿
+      previousMillis = millis();
+      ledState = LOW; // 切换时先熄灭，保持状态同步
+      setLeds(ledState);
+
+      Serial.print("切换至档位: ");
+      Serial.print(speedLevel);
+      Serial.print(" (频率: ");
+      Serial.print(currentFreq);
+      Serial.println("Hz)");
+      
+      lastDebounceTime = millis();
     }
-    delay(50); // 防抖
   }
   lastTouchState = currentTouchState;
 
-  // ===================== 2. 根据档位设置呼吸速度 =====================
-  int delayTime;  // 延时时间（控制呼吸快慢）
-  switch (speedGear) {
-    case 1:
-      delayTime = 30;   // 1档：慢速呼吸
-      break;
-    case 2:
-      delayTime = 15;   // 2档：中速呼吸
-      break;
-    case 3:
-      delayTime = 5;    // 3档：快速呼吸
-      break;
-    default:
-      delayTime = 30;
-  }
 
-  // ===================== 3. 呼吸灯核心PWM逻辑 =====================
-  if (isFadeUp) {
-    brightness += fadeStep;   // 亮度递增
-    if (brightness >= 255) {  // 达到最亮
-      brightness = 255;
-      isFadeUp = false;       // 切换为递减
-    }
-  } else {
-    brightness -= fadeStep;   // 亮度递减
-    if (brightness <= 0) {    // 达到最暗
-      brightness = 0;
-      isFadeUp = true;        // 切换为递增
-    }
-  }
+  // -------------------------
+  // 第二部分：精准频率闪烁逻辑 (非阻塞)
+  // -------------------------
+  unsigned long currentMillis = millis();
+  // 计算当前频率下一次亮/灭切换需要的时间间隔（毫秒）
+  // 500 / 频率 = 半个周期的时间。例如1Hz时，500ms切换一次状态（亮500ms+灭500ms=1秒）
+  unsigned long interval = 500 / currentFreq; 
 
-  // 给所有LED设置亮度
+  // 如果到了该切换状态的时间
+  if (currentMillis - previousMillis >= interval) {
+    previousMillis = currentMillis; // 更新上一次的时间戳
+    ledState = !ledState;           // 翻转LED状态（亮变灭，灭变亮）
+    setLeds(ledState);              // 将状态写入所有LED
+  }
+}
+
+// 辅助函数：同时控制所有LED引脚
+void setLeds(bool state) {
   for (int i = 0; i < ledCount; i++) {
-    analogWrite(ledPins[i], brightness);
+    digitalWrite(ledPins[i], state);
   }
-
-  delay(delayTime); // 档位控制延时，改变呼吸速度
 }
